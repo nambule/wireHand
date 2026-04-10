@@ -427,6 +427,17 @@ function landmarkDist(a, b, W, H) {
     return Math.hypot((a.x - b.x) * W, (a.y - b.y) * H);
 }
 
+// Index finger is "fully deployed" when its tip is farther from the wrist
+// than its PIP joint — curling brings the tip back in, collapsing this distance
+function isIndexExtended(landmarks) {
+    const wrist = landmarks[0];
+    const pip   = landmarks[6]; // index PIP (second joint)
+    const tip   = landmarks[8]; // index tip
+    const dTip  = Math.hypot(tip.x - wrist.x, tip.y - wrist.y);
+    const dPip  = Math.hypot(pip.x - wrist.x, pip.y - wrist.y);
+    return dTip > dPip * 1.08;  // 8% margin prevents flicker at the boundary
+}
+
 // Draw all committed + in-progress polygons
 function drawPolygons() {
     const W = canvas.width, H = canvas.height;
@@ -698,7 +709,8 @@ function onResults(results) {
         const proxPct   = Math.min(1, proximity / (PROX_THRESHOLD * 1.6));
         proxFillEl.style.height = (proxPct * 100) + '%';
 
-        const inDrawMode = proximity >= PROX_THRESHOLD;
+        const indexExtended = isIndexExtended(lm0);
+        const inDrawMode    = proximity >= PROX_THRESHOLD && indexExtended;
         proxFillEl.classList.toggle('hot', inDrawMode);
         drawBadgeEl.classList.toggle('active', inDrawMode);
 
@@ -756,7 +768,7 @@ function onResults(results) {
         lmDisplay.innerHTML =
             `WRIST  x:${lm0[0].x.toFixed(3)}  y:${lm0[0].y.toFixed(3)}<br>` +
             `INDEX  x:${lm0[8].x.toFixed(3)}  y:${lm0[8].y.toFixed(3)}<br>` +
-            `PROX   ${proximity.toFixed(0)}px${inDrawMode ? ' ◆ DRAW' : ''}`;
+            `PROX   ${proximity.toFixed(0)}px  IDX:${indexExtended ? 'EXTENDED' : 'FOLDED'}${inDrawMode ? ' ◆' : ''}`;
     } else {
         noHandEl.style.opacity = '1';
         lmDisplay.innerHTML = '';
