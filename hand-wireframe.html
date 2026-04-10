@@ -1,0 +1,587 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HAND::WIRE</title>
+    <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@400;700;900&display=swap" rel="stylesheet">
+    <style>
+        *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+        :root {
+            --green:     #00FF41;
+            --green-dim: #007a1e;
+            --green-glow: rgba(0, 255, 65, 0.35);
+            --bg: #010801;
+        }
+
+        html, body {
+            width: 100%; height: 100%;
+            background: var(--bg);
+            overflow: hidden;
+            cursor: none;
+            font-family: 'Share Tech Mono', monospace;
+        }
+
+        /* ── Custom cursor ── */
+        #cursor {
+            position: fixed; width: 18px; height: 18px;
+            border: 1px solid var(--green); border-radius: 50%;
+            pointer-events: none; z-index: 9999;
+            transform: translate(-50%, -50%);
+            box-shadow: 0 0 6px var(--green);
+            transition: width 0.15s, height 0.15s;
+        }
+        #cursor::after {
+            content: ''; position: absolute;
+            top: 50%; left: 50%; width: 4px; height: 4px;
+            background: var(--green); border-radius: 50%;
+            transform: translate(-50%, -50%);
+        }
+
+        /* ── Layout ── */
+        #app {
+            position: relative; width: 100vw; height: 100vh;
+            display: flex; align-items: center; justify-content: center;
+        }
+
+        #video {
+            position: absolute; width: 100%; height: 100%;
+            object-fit: cover;
+            opacity: 0.15;
+            filter: grayscale(1) contrast(1.4);
+            transform: scaleX(-1);
+        }
+
+        #canvas {
+            position: absolute; width: 100%; height: 100%;
+            transform: scaleX(-1);
+        }
+
+        /* ── Overlays ── */
+        #scanlines {
+            position: absolute; inset: 0; pointer-events: none; z-index: 10;
+            background: repeating-linear-gradient(
+                0deg, transparent, transparent 2px,
+                rgba(0,0,0,0.07) 2px, rgba(0,0,0,0.07) 4px
+            );
+        }
+
+        #vignette {
+            position: absolute; inset: 0; pointer-events: none; z-index: 11;
+            background: radial-gradient(ellipse at center, transparent 35%, rgba(0,4,0,0.85) 100%);
+        }
+
+        /* ── HUD corners ── */
+        .corner {
+            position: absolute; width: 44px; height: 44px; z-index: 20;
+        }
+        .corner::before, .corner::after {
+            content: ''; position: absolute; background: var(--green);
+            box-shadow: 0 0 6px var(--green);
+        }
+        .corner::before { width: 100%; height: 1px; top: 0; left: 0; }
+        .corner::after  { width: 1px; height: 100%; top: 0; left: 0; }
+        .corner.tl { top: 16px; left: 16px; }
+        .corner.tr { top: 16px; right: 16px; transform: scaleX(-1); }
+        .corner.bl { bottom: 16px; left: 16px; transform: scaleY(-1); }
+        .corner.br { bottom: 16px; right: 16px; transform: scale(-1,-1); }
+
+        /* ── Top HUD ── */
+        #hud-top {
+            position: absolute; top: 0; left: 0; right: 0;
+            padding: 22px 68px;
+            display: flex; justify-content: space-between; align-items: center;
+            z-index: 20;
+        }
+
+        #title {
+            font-family: 'Orbitron', sans-serif;
+            font-size: 17px; font-weight: 900;
+            letter-spacing: 10px; color: var(--green);
+            text-shadow: 0 0 18px var(--green), 0 0 50px rgba(0,255,65,0.35);
+        }
+
+        #status-bar { display: flex; gap: 28px; }
+
+        .stat { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
+        .stat-label { font-size: 9px; color: var(--green-dim); letter-spacing: 2px; }
+        .stat-value { font-size: 15px; color: var(--green); text-shadow: 0 0 8px var(--green); }
+
+        /* ── Bottom HUD ── */
+        #hud-bottom {
+            position: absolute; bottom: 0; left: 0; right: 0;
+            padding: 22px 68px;
+            display: flex; justify-content: space-between; align-items: flex-end;
+            z-index: 20; font-size: 10px; color: var(--green-dim);
+        }
+
+        #lm-display { line-height: 2; }
+
+        #hint { text-align: right; line-height: 2; opacity: 0.5; }
+
+        /* ── No-hand prompt ── */
+        #no-hand {
+            position: absolute; top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center; z-index: 15;
+            color: rgba(0,255,65,0.18);
+            font-size: 12px; letter-spacing: 5px;
+            pointer-events: none;
+            transition: opacity 0.6s ease;
+        }
+        #no-hand .big {
+            display: block;
+            font-family: 'Orbitron', sans-serif;
+            font-size: 10px; letter-spacing: 12px;
+            margin-bottom: 10px;
+        }
+
+        /* ── Loading screen ── */
+        #loading {
+            position: absolute; inset: 0; background: var(--bg);
+            display: flex; flex-direction: column;
+            align-items: center; justify-content: center;
+            z-index: 100;
+            transition: opacity 0.6s ease;
+        }
+
+        #loading-title {
+            font-family: 'Orbitron', sans-serif;
+            font-size: 32px; font-weight: 900; letter-spacing: 14px;
+            color: var(--green);
+            text-shadow: 0 0 30px var(--green), 0 0 80px rgba(0,255,65,0.3);
+            margin-bottom: 52px;
+            animation: hpulse 2s ease-in-out infinite;
+        }
+
+        @keyframes hpulse {
+            0%,100% { text-shadow: 0 0 20px var(--green), 0 0 60px rgba(0,255,65,0.2); }
+            50%      { text-shadow: 0 0 40px var(--green), 0 0 120px rgba(0,255,65,0.5), 0 0 200px rgba(0,255,65,0.15); }
+        }
+
+        #loading-log {
+            width: 420px; max-height: 200px;
+            overflow: hidden; font-size: 11px; line-height: 2.2;
+            color: var(--green-dim);
+        }
+
+        .log-line { animation: logIn 0.25s ease; }
+        @keyframes logIn {
+            from { opacity: 0; transform: translateX(-8px); }
+            to   { opacity: 1; transform: translateX(0); }
+        }
+
+        #prog-wrap {
+            width: 420px; margin-top: 28px;
+            height: 1px; background: rgba(0,255,65,0.12);
+        }
+        #prog-bar {
+            height: 100%; background: var(--green);
+            box-shadow: 0 0 10px var(--green);
+            width: 0%; transition: width 0.35s ease;
+        }
+
+        /* ── Hand detection flash ── */
+        #detect-flash {
+            position: absolute; inset: 0; pointer-events: none; z-index: 12;
+            background: rgba(0,255,65,0.04);
+            opacity: 0; transition: opacity 0.1s ease;
+        }
+
+        @keyframes glitch {
+            0%   { clip-path: inset(0 0 96% 0); transform: scaleX(-1) translateX(-3px); }
+            33%  { clip-path: inset(40% 0 40% 0); transform: scaleX(-1) translateX(3px); }
+            66%  { clip-path: inset(80% 0 5% 0);  transform: scaleX(-1) translateX(-3px); }
+            100% { clip-path: none; transform: scaleX(-1); }
+        }
+        .glitching { animation: glitch 0.08s steps(1) forwards; }
+    </style>
+</head>
+<body>
+
+<div id="cursor"></div>
+
+<div id="app">
+    <video id="video" autoplay playsinline muted></video>
+    <canvas id="canvas"></canvas>
+
+    <div id="scanlines"></div>
+    <div id="vignette"></div>
+    <div id="detect-flash"></div>
+
+    <div class="corner tl"></div>
+    <div class="corner tr"></div>
+    <div class="corner bl"></div>
+    <div class="corner br"></div>
+
+    <div id="hud-top">
+        <div id="title">HAND::WIRE</div>
+        <div id="status-bar">
+            <div class="stat">
+                <span class="stat-label">FPS</span>
+                <span class="stat-value" id="fps-val">--</span>
+            </div>
+            <div class="stat">
+                <span class="stat-label">HANDS</span>
+                <span class="stat-value" id="hands-val">0</span>
+            </div>
+            <div class="stat">
+                <span class="stat-label">CONF</span>
+                <span class="stat-value" id="conf-val">--</span>
+            </div>
+        </div>
+    </div>
+
+    <div id="no-hand">
+        <span class="big">AWAITING INPUT</span>
+        place hand in frame
+    </div>
+
+    <div id="hud-bottom">
+        <div id="lm-display"></div>
+        <div id="hint">MEDIAPIPE HANDS v0.4<br>21 LANDMARKS · REAL-TIME 3D</div>
+    </div>
+</div>
+
+<!-- Loading -->
+<div id="loading">
+    <div id="loading-title">HAND::WIRE</div>
+    <div id="loading-log"></div>
+    <div id="prog-wrap"><div id="prog-bar"></div></div>
+</div>
+
+<!-- MediaPipe CDN -->
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+<script>
+// ── Cursor ────────────────────────────────────────────────────────────────────
+const cursorEl = document.getElementById('cursor');
+document.addEventListener('mousemove', e => {
+    cursorEl.style.left = e.clientX + 'px';
+    cursorEl.style.top  = e.clientY + 'px';
+});
+
+// ── Loading sequence ──────────────────────────────────────────────────────────
+const loadingEl  = document.getElementById('loading');
+const logEl      = document.getElementById('loading-log');
+const progBarEl  = document.getElementById('prog-bar');
+
+const BOOT_MSGS = [
+    '> INITIALIZING HAND::WIRE SYSTEM...',
+    '> LOADING MEDIAPIPE WASM RUNTIME...',
+    '> COMPILING HAND DETECTION MODEL...',
+    '> CALIBRATING 21 LANDMARK NODES...',
+    '> CONFIGURING DEPTH ESTIMATION ENGINE...',
+    '> REQUESTING CAMERA PERMISSIONS...',
+    '> STARTING VIDEO CAPTURE PIPELINE...',
+    '> ALL SYSTEMS NOMINAL — READY',
+];
+
+let bootDelay = 0;
+BOOT_MSGS.forEach((msg, i) => {
+    bootDelay += 280 + Math.random() * 350;
+    setTimeout(() => {
+        const line = document.createElement('div');
+        line.className = 'log-line';
+        line.textContent = msg;
+        logEl.appendChild(line);
+        logEl.scrollTop = logEl.scrollHeight;
+        progBarEl.style.width = ((i + 1) / BOOT_MSGS.length * 100) + '%';
+    }, bootDelay);
+});
+
+// ── Canvas ────────────────────────────────────────────────────────────────────
+const video  = document.getElementById('video');
+const canvas = document.getElementById('canvas');
+const ctx    = canvas.getContext('2d');
+
+function resize() {
+    canvas.width  = window.innerWidth;
+    canvas.height = window.innerHeight;
+}
+resize();
+window.addEventListener('resize', resize);
+
+// ── Hand skeleton connections ─────────────────────────────────────────────────
+const CONNECTIONS = [
+    // Thumb
+    [0,1],[1,2],[2,3],[3,4],
+    // Index
+    [0,5],[5,6],[6,7],[7,8],
+    // Middle
+    [5,9],[9,10],[10,11],[11,12],
+    // Ring
+    [9,13],[13,14],[14,15],[15,16],
+    // Pinky
+    [13,17],[17,18],[18,19],[19,20],
+    // Wrist bridge
+    [0,17],
+];
+
+const FINGERTIPS = new Set([4, 8, 12, 16, 20]);
+
+// Per-finger color (segment by landmark index ranges)
+function fingerColor(a, b) {
+    const idx = Math.max(a, b);
+    if (idx <= 4)  return { line: '#00FF41', glow: 'rgba(0,255,65,0.5)'   }; // thumb
+    if (idx <= 8)  return { line: '#39FF14', glow: 'rgba(57,255,20,0.5)'  }; // index
+    if (idx <= 12) return { line: '#00FFCC', glow: 'rgba(0,255,204,0.5)'  }; // middle
+    if (idx <= 16) return { line: '#00BFFF', glow: 'rgba(0,191,255,0.5)'  }; // ring
+    return             { line: '#BF7FFF', glow: 'rgba(191,127,255,0.5)' }; // pinky
+}
+
+// ── State ─────────────────────────────────────────────────────────────────────
+let animT = 0;
+let prevHandCount = 0;
+let fps = 0, frameCount = 0, lastFpsTime = performance.now();
+let modelReady = false;
+
+const noHandEl  = document.getElementById('no-hand');
+const lmDisplay = document.getElementById('lm-display');
+const fpsEl     = document.getElementById('fps-val');
+const handsEl   = document.getElementById('hands-val');
+const confEl    = document.getElementById('conf-val');
+const flashEl   = document.getElementById('detect-flash');
+const titleEl   = document.getElementById('title');
+
+// ── Draw one hand ─────────────────────────────────────────────────────────────
+function drawHand(landmarks, handedness) {
+    const W = canvas.width, H = canvas.height;
+
+    // Map normalized → canvas (note: canvas is CSS-mirrored, coordinates stay raw)
+    const pts = landmarks.map(lm => ({
+        x: lm.x * W,
+        y: lm.y * H,
+        z: lm.z   // negative = closer to camera
+    }));
+
+    // ── Bones ──
+    CONNECTIONS.forEach(([a, b]) => {
+        const pA = pts[a], pB = pts[b];
+        const col = fingerColor(a, b);
+
+        // depth cue: closer joints are brighter
+        const avgZ  = (pA.z + pB.z) / 2;
+        const alpha = Math.min(1, Math.max(0.45, 1 + avgZ * 4));
+
+        // Soft outer glow
+        ctx.save();
+        ctx.globalAlpha = alpha * 0.35;
+        ctx.strokeStyle = col.line;
+        ctx.lineWidth   = 10;
+        ctx.lineCap     = 'round';
+        ctx.shadowBlur  = 22;
+        ctx.shadowColor = col.glow;
+        ctx.beginPath();
+        ctx.moveTo(pA.x, pA.y);
+        ctx.lineTo(pB.x, pB.y);
+        ctx.stroke();
+        ctx.restore();
+
+        // Sharp core line
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.strokeStyle = col.line;
+        ctx.lineWidth   = 1.5;
+        ctx.lineCap     = 'round';
+        ctx.shadowBlur  = 5;
+        ctx.shadowColor = col.line;
+        ctx.beginPath();
+        ctx.moveTo(pA.x, pA.y);
+        ctx.lineTo(pB.x, pB.y);
+        ctx.stroke();
+        ctx.restore();
+    });
+
+    // ── Joints ──
+    pts.forEach((pt, i) => {
+        const col    = fingerColor(i, i);
+        const isTip  = FINGERTIPS.has(i);
+        const isBase = i === 0;
+
+        // Pulsing radius for fingertips
+        const pulse = isTip ? Math.sin(animT * 3.5 + i * 1.1) * 1.8 + 1.8 : 0;
+        const r     = isBase ? 7 : isTip ? 6 : 3.5;
+
+        // Outer halo for tips
+        if (isTip) {
+            ctx.save();
+            ctx.globalAlpha = 0.12;
+            ctx.shadowBlur  = 28;
+            ctx.shadowColor = col.line;
+            ctx.fillStyle   = col.line;
+            ctx.beginPath();
+            ctx.arc(pt.x, pt.y, r + 10 + pulse, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.restore();
+        }
+
+        // Glow fill
+        ctx.save();
+        ctx.globalAlpha = 0.25;
+        ctx.shadowBlur  = 14;
+        ctx.shadowColor = col.line;
+        ctx.fillStyle   = col.line;
+        ctx.beginPath();
+        ctx.arc(pt.x, pt.y, r + pulse * 0.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+
+        // Solid core
+        ctx.save();
+        ctx.shadowBlur  = 4;
+        ctx.shadowColor = col.line;
+        ctx.fillStyle   = col.line;
+        ctx.beginPath();
+        ctx.arc(pt.x, pt.y, Math.max(2, r - 1 + pulse * 0.25), 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+
+        // Landmark index label at wrist + tips
+        if (isBase || isTip) {
+            ctx.save();
+            ctx.font      = '8px Share Tech Mono, monospace';
+            ctx.fillStyle = 'rgba(0,255,65,0.45)';
+            ctx.fillText(String(i).padStart(2, '0'), pt.x + 9, pt.y - 7);
+            ctx.restore();
+        }
+    });
+
+    // Animated dashed ring at wrist
+    const wrist = pts[0];
+    ctx.save();
+    ctx.globalAlpha = 0.3;
+    ctx.strokeStyle = '#00FF41';
+    ctx.shadowBlur  = 8;
+    ctx.shadowColor = '#00FF41';
+    ctx.lineWidth   = 1;
+    ctx.setLineDash([5, 5]);
+    ctx.lineDashOffset = -(animT * 25);
+    ctx.beginPath();
+    ctx.arc(wrist.x, wrist.y, 16, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+
+    // Hand label (L / R)
+    if (handedness) {
+        const labelPt = pts[9]; // mid-palm
+        ctx.save();
+        ctx.font      = '10px Orbitron, sans-serif';
+        ctx.fillStyle = 'rgba(0,255,65,0.5)';
+        ctx.fillText(handedness.toUpperCase(), labelPt.x - 6, labelPt.y - 28);
+        ctx.restore();
+    }
+}
+
+// ── Results callback ──────────────────────────────────────────────────────────
+function onResults(results) {
+    // First callback = model is truly ready → hide loading screen
+    if (!modelReady) {
+        modelReady = true;
+        loadingEl.style.opacity = '0';
+        setTimeout(() => { loadingEl.style.display = 'none'; }, 600);
+    }
+
+    // FPS
+    frameCount++;
+    const now = performance.now();
+    if (now - lastFpsTime >= 500) {
+        fps = frameCount / ((now - lastFpsTime) / 1000);
+        frameCount = 0;
+        lastFpsTime = now;
+    }
+    animT += 0.016;
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    const detected = results.multiHandLandmarks ? results.multiHandLandmarks.length : 0;
+
+    // Flash on first detection
+    if (detected > 0 && prevHandCount === 0) {
+        flashEl.style.opacity = '1';
+        setTimeout(() => flashEl.style.opacity = '0', 120);
+    }
+    prevHandCount = detected;
+
+    let maxConf = 0;
+
+    if (detected > 0) {
+        noHandEl.style.opacity = '0';
+        results.multiHandLandmarks.forEach((landmarks, idx) => {
+            const hw = results.multiHandedness?.[idx];
+            if (hw) maxConf = Math.max(maxConf, hw.score);
+            drawHand(landmarks, hw?.label);
+        });
+        // Live readout for first hand
+        const lm = results.multiHandLandmarks[0];
+        lmDisplay.innerHTML =
+            `WRIST  x:${lm[0].x.toFixed(3)}  y:${lm[0].y.toFixed(3)}<br>` +
+            `INDEX  x:${lm[8].x.toFixed(3)}  y:${lm[8].y.toFixed(3)}<br>` +
+            `MIDDLE x:${lm[12].x.toFixed(3)}  y:${lm[12].y.toFixed(3)}`;
+    } else {
+        noHandEl.style.opacity = '1';
+        lmDisplay.innerHTML = '';
+    }
+
+    fpsEl.textContent   = fps.toFixed(0);
+    handsEl.textContent = detected;
+    confEl.textContent  = maxConf > 0 ? (maxConf * 100).toFixed(0) + '%' : '--';
+}
+
+// ── MediaPipe Hands ───────────────────────────────────────────────────────────
+const hands = new Hands({
+    locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`
+});
+
+hands.setOptions({
+    maxNumHands:            2,
+    modelComplexity:        1,
+    minDetectionConfidence: 0.7,
+    minTrackingConfidence:  0.5,
+});
+
+hands.onResults(onResults);
+
+// ── Camera ────────────────────────────────────────────────────────────────────
+const camera = new Camera(video, {
+    onFrame: async () => {
+        try {
+            await hands.send({ image: video });
+        } catch (e) {
+            console.error('[HAND::WIRE] hands.send error:', e);
+        }
+    },
+    width: 1280, height: 720
+});
+
+camera.start()
+    .then(() => {
+        // Add a "model loading" message to the boot log while we wait for
+        // the first onResults callback (which confirms the WASM model is ready)
+        const line = document.createElement('div');
+        line.className = 'log-line';
+        line.textContent = '> DOWNLOADING ML MODEL — PLEASE WAIT...';
+        logEl.appendChild(line);
+        progBarEl.style.width = '90%';
+    })
+    .catch(err => {
+        const line = document.createElement('div');
+        line.className = 'log-line';
+        line.style.color = '#ff4141';
+        line.textContent = `> CAMERA ERROR: ${err.message}`;
+        logEl.appendChild(line);
+    });
+
+// ── Random title glitch ───────────────────────────────────────────────────────
+setInterval(() => {
+    if (Math.random() < 0.12) {
+        titleEl.classList.add('glitching');
+        setTimeout(() => titleEl.classList.remove('glitching'), 90);
+    }
+}, 4000);
+</script>
+</body>
+</html>
