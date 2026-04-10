@@ -196,6 +196,63 @@
             100% { clip-path: none; transform: scaleX(-1); }
         }
         .glitching { animation: glitch 0.08s steps(1) forwards; }
+
+        /* ── Draw mode badge ── */
+        #draw-badge {
+            position: absolute; top: 50%; left: 50%;
+            transform: translate(-50%, calc(-50% - 60px));
+            font-family: 'Orbitron', sans-serif;
+            font-size: 10px; letter-spacing: 8px;
+            color: #FF44CC; text-shadow: 0 0 16px #FF44CC, 0 0 40px rgba(255,68,204,0.4);
+            pointer-events: none; z-index: 16;
+            opacity: 0; transition: opacity 0.25s ease;
+        }
+        #draw-badge.active {
+            opacity: 1;
+            animation: drawpulse 0.9s ease-in-out infinite;
+        }
+        @keyframes drawpulse {
+            0%,100% { opacity: 1; }
+            50%      { opacity: 0.45; }
+        }
+
+        /* ── Proximity bar (left side) ── */
+        #prox-wrap {
+            position: absolute; left: 22px; top: 50%;
+            transform: translateY(-50%);
+            display: flex; flex-direction: column; align-items: center; gap: 6px;
+            z-index: 20;
+        }
+        #prox-track {
+            width: 2px; height: 100px;
+            background: rgba(0,255,65,0.1);
+            border-radius: 2px; position: relative; overflow: hidden;
+        }
+        #prox-fill {
+            position: absolute; bottom: 0; left: 0; right: 0;
+            height: 0%;
+            background: var(--green); box-shadow: 0 0 8px var(--green);
+            border-radius: 2px;
+            transition: height 0.08s ease, background 0.2s ease, box-shadow 0.2s ease;
+        }
+        #prox-fill.hot {
+            background: #FF44CC; box-shadow: 0 0 12px #FF44CC;
+        }
+        #prox-label {
+            font-size: 7px; color: var(--green-dim); letter-spacing: 2px; writing-mode: vertical-rl;
+        }
+
+        /* ── Polygon vertex count ── */
+        #vtx-count {
+            position: absolute; left: 50%; top: 50%;
+            transform: translate(-50%, calc(-50% + 60px));
+            font-family: 'Share Tech Mono', monospace;
+            font-size: 10px; letter-spacing: 4px;
+            color: rgba(255,68,204,0.7);
+            pointer-events: none; z-index: 16;
+            opacity: 0; transition: opacity 0.2s ease;
+        }
+        #vtx-count.active { opacity: 1; }
     </style>
 </head>
 <body>
@@ -209,6 +266,14 @@
     <div id="scanlines"></div>
     <div id="vignette"></div>
     <div id="detect-flash"></div>
+
+    <!-- Draw mode overlays -->
+    <div id="draw-badge">◆ DRAW MODE ◆</div>
+    <div id="vtx-count"></div>
+    <div id="prox-wrap">
+        <div id="prox-track"><div id="prox-fill"></div></div>
+        <span id="prox-label">PROX</span>
+    </div>
 
     <div class="corner tl"></div>
     <div class="corner tr"></div>
@@ -240,7 +305,7 @@
 
     <div id="hud-bottom">
         <div id="lm-display"></div>
-        <div id="hint">MEDIAPIPE HANDS v0.4<br>21 LANDMARKS · REAL-TIME 3D</div>
+        <div id="hint">MEDIAPIPE HANDS v0.4<br>21 LANDMARKS · REAL-TIME 3D<br>MOVE CLOSE TO DRAW · [C] CLEAR</div>
     </div>
 </div>
 
@@ -338,6 +403,118 @@ let animT = 0;
 let prevHandCount = 0;
 let fps = 0, frameCount = 0, lastFpsTime = performance.now();
 let modelReady = false;
+
+// ── Polygon drawing state ─────────────────────────────────────────────────────
+const polygons  = [];   // committed shapes: [{pts:[{x,y}], color}]
+let currentPoly = null; // in-progress shape
+const POLY_COLORS = ['#FF44CC','#00FFFF','#FFD700','#FF6B35','#AAFFAA','#FF4466'];
+let polyColorIdx  = 0;
+
+const PROX_THRESHOLD = 100; // px: wrist→MCP9 distance to enter draw mode
+const MIN_VERTEX_DIST = 14;  // px: min travel before placing a new vertex
+const CLOSE_DIST      = 38;  // px: distance to first point to auto-close shape
+
+const drawBadgeEl = document.getElementById('draw-badge');
+const vtxCountEl  = document.getElementById('vtx-count');
+const proxFillEl  = document.getElementById('prox-fill');
+
+function nextPolyColor() {
+    return POLY_COLORS[polyColorIdx++ % POLY_COLORS.length];
+}
+
+// Pixel distance between two landmarks on the canvas
+function landmarkDist(a, b, W, H) {
+    return Math.hypot((a.x - b.x) * W, (a.y - b.y) * H);
+}
+
+// Draw all committed + in-progress polygons
+function drawPolygons() {
+    const W = canvas.width, H = canvas.height;
+
+    // Committed shapes
+    polygons.forEach(poly => {
+        if (poly.pts.length < 2) return;
+        ctx.save();
+        ctx.beginPath();
+        poly.pts.forEach((p, i) => i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y));
+        ctx.closePath();
+
+        // Glow fill
+        ctx.fillStyle = poly.color;
+        ctx.globalAlpha = 0.07;
+        ctx.shadowBlur  = 0;
+        ctx.fill();
+
+        // Glow stroke
+        ctx.globalAlpha = 0.4;
+        ctx.shadowBlur  = 20;
+        ctx.shadowColor = poly.color;
+        ctx.strokeStyle = poly.color;
+        ctx.lineWidth   = 3;
+        ctx.stroke();
+
+        // Sharp inner stroke
+        ctx.globalAlpha = 0.9;
+        ctx.shadowBlur  = 4;
+        ctx.lineWidth   = 1.5;
+        ctx.stroke();
+        ctx.restore();
+
+        // Vertex dots
+        poly.pts.forEach(p => {
+            ctx.save();
+            ctx.globalAlpha = 0.8;
+            ctx.shadowBlur  = 8;
+            ctx.shadowColor = poly.color;
+            ctx.fillStyle   = poly.color;
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, 3, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.restore();
+        });
+    });
+
+    // In-progress polygon (dashed)
+    if (currentPoly && currentPoly.pts.length > 0) {
+        const pts = currentPoly.pts;
+        ctx.save();
+        ctx.setLineDash([7, 5]);
+        ctx.lineDashOffset = -(animT * 30);
+        ctx.beginPath();
+        pts.forEach((p, i) => i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y));
+        ctx.strokeStyle = currentPoly.color;
+        ctx.lineWidth   = 1.5;
+        ctx.globalAlpha = 0.85;
+        ctx.shadowBlur  = 10;
+        ctx.shadowColor = currentPoly.color;
+        ctx.stroke();
+
+        // Closing guide line to first point
+        if (pts.length > 2) {
+            const first = pts[0], last = pts[pts.length - 1];
+            ctx.setLineDash([3, 8]);
+            ctx.globalAlpha = 0.3;
+            ctx.beginPath();
+            ctx.moveTo(last.x, last.y);
+            ctx.lineTo(first.x, first.y);
+            ctx.stroke();
+        }
+        ctx.restore();
+
+        // Vertex dots for in-progress
+        pts.forEach((p, i) => {
+            ctx.save();
+            ctx.globalAlpha = i === 0 ? 1 : 0.6;
+            ctx.shadowBlur  = i === 0 ? 16 : 6;
+            ctx.shadowColor = currentPoly.color;
+            ctx.fillStyle   = currentPoly.color;
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, i === 0 ? 5 : 3, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.restore();
+        });
+    }
+}
 
 const noHandEl  = document.getElementById('no-hand');
 const lmDisplay = document.getElementById('lm-display');
@@ -497,6 +674,9 @@ function onResults(results) {
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
+    // Draw persistent polygons first (hand wireframe renders on top)
+    drawPolygons();
+
     const detected = results.multiHandLandmarks ? results.multiHandLandmarks.length : 0;
 
     // Flash on first detection
@@ -510,20 +690,86 @@ function onResults(results) {
 
     if (detected > 0) {
         noHandEl.style.opacity = '0';
+
+        // ── Proximity + draw mode (use first hand) ──
+        const lm0 = results.multiHandLandmarks[0];
+        const W = canvas.width, H = canvas.height;
+        const proximity = landmarkDist(lm0[0], lm0[9], W, H);
+        const proxPct   = Math.min(1, proximity / (PROX_THRESHOLD * 1.6));
+        proxFillEl.style.height = (proxPct * 100) + '%';
+
+        const inDrawMode = proximity >= PROX_THRESHOLD;
+        proxFillEl.classList.toggle('hot', inDrawMode);
+        drawBadgeEl.classList.toggle('active', inDrawMode);
+
+        if (inDrawMode) {
+            // Index fingertip in canvas coords
+            const tip = lm0[8];
+            const tx  = tip.x * W;
+            const ty  = tip.y * H;
+
+            if (!currentPoly) {
+                // Start a new polygon
+                currentPoly = { pts: [{ x: tx, y: ty }], color: nextPolyColor() };
+            } else {
+                const last  = currentPoly.pts[currentPoly.pts.length - 1];
+                const moved = Math.hypot(tx - last.x, ty - last.y);
+
+                if (moved >= MIN_VERTEX_DIST) {
+                    // Check if we're closing the shape
+                    const first  = currentPoly.pts[0];
+                    const dFirst = Math.hypot(tx - first.x, ty - first.y);
+
+                    if (dFirst <= CLOSE_DIST && currentPoly.pts.length >= 4) {
+                        // Snap-close: commit the polygon
+                        polygons.push({ pts: [...currentPoly.pts], color: currentPoly.color });
+                        currentPoly = null;
+                    } else {
+                        currentPoly.pts.push({ x: tx, y: ty });
+                    }
+                }
+            }
+
+            // Vertex count badge
+            if (currentPoly) {
+                vtxCountEl.textContent = `${currentPoly.pts.length} VTX`;
+                vtxCountEl.classList.add('active');
+            } else {
+                vtxCountEl.classList.remove('active');
+            }
+        } else {
+            // Hand moved away — commit whatever is in progress
+            if (currentPoly && currentPoly.pts.length >= 3) {
+                polygons.push({ pts: [...currentPoly.pts], color: currentPoly.color });
+            }
+            currentPoly = null;
+            vtxCountEl.classList.remove('active');
+        }
+
         results.multiHandLandmarks.forEach((landmarks, idx) => {
             const hw = results.multiHandedness?.[idx];
             if (hw) maxConf = Math.max(maxConf, hw.score);
             drawHand(landmarks, hw?.label);
         });
+
         // Live readout for first hand
-        const lm = results.multiHandLandmarks[0];
         lmDisplay.innerHTML =
-            `WRIST  x:${lm[0].x.toFixed(3)}  y:${lm[0].y.toFixed(3)}<br>` +
-            `INDEX  x:${lm[8].x.toFixed(3)}  y:${lm[8].y.toFixed(3)}<br>` +
-            `MIDDLE x:${lm[12].x.toFixed(3)}  y:${lm[12].y.toFixed(3)}`;
+            `WRIST  x:${lm0[0].x.toFixed(3)}  y:${lm0[0].y.toFixed(3)}<br>` +
+            `INDEX  x:${lm0[8].x.toFixed(3)}  y:${lm0[8].y.toFixed(3)}<br>` +
+            `PROX   ${proximity.toFixed(0)}px${inDrawMode ? ' ◆ DRAW' : ''}`;
     } else {
         noHandEl.style.opacity = '1';
         lmDisplay.innerHTML = '';
+        proxFillEl.style.height = '0%';
+        proxFillEl.classList.remove('hot');
+        drawBadgeEl.classList.remove('active');
+        vtxCountEl.classList.remove('active');
+
+        // Commit any in-progress polygon when hand leaves frame
+        if (currentPoly && currentPoly.pts.length >= 3) {
+            polygons.push({ pts: [...currentPoly.pts], color: currentPoly.color });
+        }
+        currentPoly = null;
     }
 
     fpsEl.textContent   = fps.toFixed(0);
@@ -574,6 +820,14 @@ camera.start()
         line.textContent = `> CAMERA ERROR: ${err.message}`;
         logEl.appendChild(line);
     });
+
+// ── Clear polygons on [C] ─────────────────────────────────────────────────────
+document.addEventListener('keydown', e => {
+    if (e.key === 'c' || e.key === 'C') {
+        polygons.length = 0;
+        currentPoly = null;
+    }
+});
 
 // ── Random title glitch ───────────────────────────────────────────────────────
 setInterval(() => {
