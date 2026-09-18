@@ -2,6 +2,8 @@
 
 HAND::WIRE is a single-page browser experiment that uses your webcam to track your hand in real time and render it as a glowing wireframe.
 
+[Try it online](https://nambule.github.io/wireHand/hand-wireframe.html) on GitHub Pages.
+
 ## How to Use
 
 1. Open `hand-wireframe.html` in a browser.
